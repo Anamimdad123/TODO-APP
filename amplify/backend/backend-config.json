@@ -1,30 +1,47 @@
 {
+  "api": {},
   "auth": {
-    "todoappf1aefdaa": {
+    "todoapp5b674a99": {
       "customAuth": false,
       "dependsOn": [],
-      "frontendAuthConfig": {
-        "mfaConfiguration": "OFF",
-        "mfaTypes": [
-          "SMS"
-        ],
-        "passwordProtectionSettings": {
-          "passwordPolicyCharacters": [],
-          "passwordPolicyMinLength": 8
-        },
-        "signupAttributes": [
-          "EMAIL"
-        ],
-        "socialProviders": [],
-        "usernameAttributes": [
-          "EMAIL"
-        ],
-        "verificationMechanisms": [
-          "EMAIL"
-        ]
-      },
       "providerPlugin": "awscloudformation",
-      "service": "Cognito"
+      "service": "Cognito",
+      "serviceType": "imported"
+    }
+  },
+  "function": {},
+  "parameters": {
+    "AMPLIFY_auth_todoapp5b674a99_nativeClientId": {
+      "usedBy": [
+        {
+          "category": "auth",
+          "resourceName": "todoapp5b674a99"
+        }
+      ]
+    },
+    "AMPLIFY_auth_todoapp5b674a99_userPoolId": {
+      "usedBy": [
+        {
+          "category": "auth",
+          "resourceName": "todoapp5b674a99"
+        }
+      ]
+    },
+    "AMPLIFY_auth_todoapp5b674a99_userPoolName": {
+      "usedBy": [
+        {
+          "category": "auth",
+          "resourceName": "todoapp5b674a99"
+        }
+      ]
+    },
+    "AMPLIFY_auth_todoapp5b674a99_webClientId": {
+      "usedBy": [
+        {
+          "category": "auth",
+          "resourceName": "todoapp5b674a99"
+        }
+      ]
     }
   }
 }

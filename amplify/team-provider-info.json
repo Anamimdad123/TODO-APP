@@ -13,7 +13,12 @@
     },
     "categories": {
       "auth": {
-        "todoappf1aefdaa": {}
+        "todoapp5b674a99": {
+          "userPoolId": "us-east-1_7e06SpUx4",
+          "userPoolName": "User pool - eivh6k",
+          "webClientId": "55kagtn0qce3qhrml4id2l11i2",
+          "nativeClientId": "55kagtn0qce3qhrml4id2l11i2"
+        }
       }
     }
   }
