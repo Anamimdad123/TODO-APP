@@ -1,0 +1,29 @@
+version: 1
+backend:
+  phases:
+    build:
+      commands:
+        - nvm use 20
+        # 1. Delete the conflicting local metadata
+        - rm -rf amplify/.config/local-*
+        - rm -f amplify/team-provider-info.json
+        # 2. Force a pull from the CURRENT app (Amplify provides $AWS_APP_ID automatically)
+        - amplify pull --appId $AWS_APP_ID --envName $AWS_BRANCH --yes
+        # 3. Push the backend changes
+        - amplifyPush --simple
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - nvm use 20
+        - npm install
+    build:
+      commands:
+        - npm run build
+  artifacts:
+    baseDirectory: dist
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - node_modules/**/*

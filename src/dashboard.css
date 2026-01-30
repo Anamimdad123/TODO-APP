@@ -1,0 +1,101 @@
+.dashboard-container {
+  margin-top: 20px;
+}
+
+.dashboard-title {
+  text-align: center;
+  color: #ff7a18;
+  margin-bottom: 15px;
+}
+
+.user-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.user-card {
+  background: #1f1f1f;
+  border-radius: 10px;
+  padding: 12px;
+  transition: all 0.3s ease;
+}
+
+.user-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+}
+
+.user-email {
+  color: #fff;
+  font-size: 14px;
+  word-break: break-word;
+}
+
+.role-badge {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.role-badge.admin {
+  background: #ff3d3d;
+  color: #fff;
+}
+
+.role-badge.employer {
+  background: #ffc107;
+  color: #000;
+}
+
+.role-badge.candidate {
+  background: #4caf50;
+  color: #fff;
+}
+
+.user-actions {
+  margin-top: 12px;
+  background: #2a2a2a;
+  padding: 10px;
+  border-radius: 8px;
+}
+
+.user-actions p {
+  color: #ddd;
+  font-size: 13px;
+  margin: 5px 0;
+}
+
+.user-actions select {
+  width: 100%;
+  padding: 8px;
+  margin-top: 10px;
+  border-radius: 6px;
+  border: none;
+}
+
+.danger-btn {
+  width: 100%;
+  margin-top: 10px;
+  background: #ff3d3d;
+  border: none;
+  color: #fff;
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.danger-btn:hover {
+  opacity: 0.85;
+}
+
+/* RESPONSIVE */
+@media (max-width: 600px) {
+  .user-email {
+    font-size: 12px;
+  }
+}
