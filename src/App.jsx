@@ -4,7 +4,6 @@ import axios from "axios";
 
 /* ================= AWS V6 CONFIGURATION ================= */
 import { Amplify } from "aws-amplify";
-// Functional imports required for v6
 import { getCurrentUser, fetchAuthSession } from "aws-amplify/auth";
 import { Authenticator } from "@aws-amplify/ui-react";
 import "@aws-amplify/ui-react/styles.css";
@@ -12,7 +11,9 @@ import awsExports from "./aws-exports";
 
 Amplify.configure(awsExports);
 
-const API_BASE_URL = "http://localhost:5000";
+/* ================= API CONFIGURATION ================= */
+// Use VITE_ prefix for Vite environment variables
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
 /* ================= MAIN DASHBOARD ================= */
 function Dashboard({ signOut }) {
@@ -46,9 +47,8 @@ function Dashboard({ signOut }) {
 
   const getRequestConfig = async () => {
     try {
-      // V6 method to get session tokens
       const { tokens } = await fetchAuthSession();
-      // Ensure token is converted to string for the header
+      // Use the JWT string directly
       const token = tokens?.idToken?.toString();
       return {
         headers: { Authorization: `Bearer ${token}` },
@@ -70,6 +70,7 @@ function Dashboard({ signOut }) {
       const config = await getRequestConfig();
 
       // 2. Sync with Backend to get Role
+      // Use the config with headers for ALL backend calls
       const syncResponse = await axios.post(`${API_BASE_URL}/sync-user`, {}, config);
       const databaseRole = syncResponse.data.role;
 
@@ -84,8 +85,8 @@ function Dashboard({ signOut }) {
         role: databaseRole,
       });
 
-      // 4. Load User's Tasks
-      const taskResponse = await axios.get(`${API_BASE_URL}/tasks/${userId}`, config);
+      // 4. Load User's Tasks (Calling /tasks instead of /tasks/ID for standard users)
+      const taskResponse = await axios.get(`${API_BASE_URL}/tasks`, config);
       setTasks(taskResponse.data);
 
       // 5. Load Administrative Data
@@ -100,7 +101,7 @@ function Dashboard({ signOut }) {
         }
       }
     } catch (error) {
-      console.error("Critical Load Error:", error);
+      console.error("Critical Load Error:", error.response?.data || error.message);
     } finally {
       setIsLoading(false);
     }
@@ -150,6 +151,7 @@ function Dashboard({ signOut }) {
   const handleViewUser = async (target) => {
     try {
       const config = await getRequestConfig();
+      // Employees/Admins call specific user ID
       const response = await axios.get(`${API_BASE_URL}/tasks/${target.cognito_id}`, config);
       setViewingUser(target);
       setViewingTasks(response.data);
@@ -177,7 +179,6 @@ function Dashboard({ signOut }) {
     );
   }
 
-  /* ================= UI RENDER ================= */
   return (
     <div className="app-layout">
       <nav className="app-sidebar">
@@ -329,8 +330,8 @@ function Dashboard({ signOut }) {
           <section className="fade-in">
             <button className="text-btn" style={{marginBottom: '1rem'}} onClick={() => setViewingUser(null)}>← Return to Directory</button>
             <div className="view-header">
-               <h2>Records for {viewingUser.firstName}</h2>
-               <p className="text-muted">{viewingUser.email}</p>
+                <h2>Records for {viewingUser.firstName}</h2>
+                <p className="text-muted">{viewingUser.email}</p>
             </div>
             <div className="grid-layout" style={{marginTop: '2rem'}}>
               {viewingTasks.length > 0 ? (
