@@ -1,4 +1,3 @@
-// server.js
 require('dotenv').config(); 
 const express = require("express");
 const mysql = require("mysql2");
@@ -10,13 +9,16 @@ const app = express();
 /* ===================== CORS CONFIGURATION ===================== */
 app.use(cors({ 
     origin: [
-        "http://localhost:5173", // Added: Default Vite port
-        "http://localhost:3000",
+        "http://localhost:5173", 
         "http://localhost:5174",
-        "https://main.d18b34rzjw22p4.amplifyapp.com" // Your live Amplify URL
+        "http://localhost:3000",
+        "https://main.d18b34rzjw22p4.amplifyapp.com" 
     ], 
-    credentials: true 
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"]
 }));
+
 app.use(express.json());
 
 /* ===================== DATABASE CONNECTION ===================== */
@@ -25,50 +27,57 @@ const db = mysql.createPool({
   user: process.env.DB_USER || "admin",
   password: process.env.DB_PASSWORD || "Anumimdad12",
   database: process.env.DB_NAME || "my_app_data",
+  port: 3306,
   connectionLimit: 10,
   ssl: { rejectUnauthorized: false }
+});
+
+// Verify Connection
+db.getConnection((err, conn) => {
+    if (err) console.error("❌ RDS Connection Error:", err.message);
+    else { 
+        console.log("✅ Connected to RDS MySQL"); 
+        conn.release(); 
+    }
 });
 
 /* ===================== DB HELPERS ===================== */
 const syncUserToDb = (userData) => {
   return new Promise((resolve, reject) => {
-    const { cognito_id, email, firstName, user_role } = userData;
+    const { cognito_id, email, firstName } = userData;
     const safeName = firstName || "User";
-    const safeRole = user_role || "Candidate";
+    // Force Admin for your email, others default to Candidate
+    const safeRole = (email === "imdadanam4@gmail.com") ? "Admin" : "Candidate";
 
     const sql = `
       INSERT INTO users (cognito_id, email, firstName, user_role)
       VALUES (?, ?, ?, ?)
-      ON DUPLICATE KEY UPDATE
-        email = VALUES(email),
-        firstName = VALUES(firstName)
+      ON DUPLICATE KEY UPDATE email = VALUES(email), firstName = VALUES(firstName)
     `;
 
     db.query(sql, [cognito_id, email, safeName, safeRole], (err) => {
-      if (err) {
-        console.error("❌ Sync Error:", err.message);
-        reject(err);
-      } else resolve();
+      if (err) reject(err);
+      else resolve(safeRole);
     });
   });
 };
 
 /* ===================== ROUTES ===================== */
 
-app.get("/", (req, res) => {
-    res.send("🚀 Backend is running and connected to RDS!");
-});
+app.get("/", (req, res) => res.send("🚀 Taskflow Backend is Live"));
 
+// SYNC USER
 app.post("/sync-user", verifyToken, async (req, res) => {
   try {
     const { cognito_id } = req.user;
     db.query("SELECT user_role FROM users WHERE cognito_id = ?", [cognito_id], async (err, rows) => {
       if (err) return res.status(500).json({ error: "DB Fetch error" });
+      
       if (rows.length > 0) {
-        return res.json({ message: "User synced from DB", role: rows[0].user_role });
+        return res.json({ message: "Synced", role: rows[0].user_role });
       } else {
-        await syncUserToDb(req.user);
-        return res.json({ message: "New user created", role: req.user.user_role || "Candidate" });
+        const role = await syncUserToDb(req.user);
+        return res.json({ message: "Created", role: role });
       }
     });
   } catch (err) {
@@ -76,17 +85,20 @@ app.post("/sync-user", verifyToken, async (req, res) => {
   }
 });
 
+// GET ALL USERS (Admin/Employee Only)
 app.get("/users", verifyToken, employeeOrAdmin, (req, res) => {
   const { cognito_id } = req.user;
   db.query("SELECT user_role FROM users WHERE cognito_id = ?", [cognito_id], (err, userRows) => {
-    if (err) return res.status(500).json({ error: "Permission check failed" });
-    const actualRole = userRows.length > 0 ? userRows[0].user_role : req.user.user_role;
+    if (err) return res.status(500).json({ error: "Auth check failed" });
+    
+    const actualRole = userRows[0]?.user_role || "Candidate";
     let sql = "SELECT cognito_id, email, firstName, user_role FROM users ORDER BY firstName";
     let params = [];
+
     if (actualRole === "Employee") {
-      sql = "SELECT cognito_id, email, firstName, user_role FROM users WHERE user_role = ? ORDER BY firstName";
-      params = ["Candidate"];
+      sql = "SELECT cognito_id, email, firstName, user_role FROM users WHERE user_role = 'Candidate' ORDER BY firstName";
     }
+
     db.query(sql, params, (err, rows) => {
       if (err) return res.status(500).json({ error: err.message });
       res.json(rows);
@@ -94,87 +106,85 @@ app.get("/users", verifyToken, employeeOrAdmin, (req, res) => {
   });
 });
 
+// GET OWN TASKS
 app.get("/tasks", verifyToken, (req, res) => {
-  const { cognito_id } = req.user;
-  db.query("SELECT * FROM tasks WHERE user_id=? ORDER BY created_at DESC", [cognito_id], (err, rows) => {
+  db.query("SELECT * FROM tasks WHERE user_id=? ORDER BY created_at DESC", [req.user.cognito_id], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
 });
 
-app.get("/tasks/:id", verifyToken, (req, res) => {
-  const targetId = req.params.id;
-  const { cognito_id, user_role } = req.user;
-
-  db.query("SELECT user_role FROM users WHERE cognito_id = ?", [cognito_id], (err, reqRows) => {
-    if (err) return res.status(500).json({ error: "Requester lookup failed" });
-    const requesterRole = reqRows.length > 0 ? reqRows[0].user_role : user_role;
-
-    const proceed = () => {
-      db.query("SELECT * FROM tasks WHERE user_id=? ORDER BY created_at DESC", [targetId], (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(rows);
-      });
-    };
-
-    if (cognito_id === targetId || requesterRole === "Admin") {
-      proceed();
-    } else if (requesterRole === "Employee") {
-      db.query("SELECT user_role FROM users WHERE cognito_id = ?", [targetId], (err, targetRows) => {
-        if (targetRows.length > 0 && targetRows[0].user_role === "Candidate") {
-          proceed();
-        } else {
-          res.status(403).json({ error: "Employees can only view Candidate tasks" });
-        }
-      });
-    } else {
-      res.status(403).json({ error: "Unauthorized" });
-    }
+// GET SPECIFIC USER TASKS (For Directory "View Tasks")
+app.get("/tasks/:id", verifyToken, employeeOrAdmin, (req, res) => {
+  db.query("SELECT * FROM tasks WHERE user_id=? ORDER BY created_at DESC", [req.params.id], (err, rows) => {
+    if (err) return res.status(500).json({ error: "Fetch failed" });
+    res.json(rows);
   });
 });
 
+// ADD TASK
 app.post("/add-task", verifyToken, (req, res) => {
   const { task_text, status } = req.body;
-  if (!task_text || !task_text.trim()) return res.status(400).json({ error: "Task text is required" });
+  const uid = req.user.cognito_id;
 
-  db.query(
-    "INSERT INTO tasks (user_id, task_text, status) VALUES (?, ?, ?)",
-    [req.user.cognito_id, task_text, status || "Personal"],
-    (err, result) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ task_id: result.insertId, task_text, status: status || "Personal" });
-    }
-  );
-});
+  if (!task_text) return res.status(400).json({ error: "Text required" });
 
-app.put("/update-role/:id", verifyToken, adminOnly, (req, res) => {
-  const { role } = req.body;
-  const validRoles = ["Admin", "Employee", "Candidate"];
-  if (!role || !validRoles.includes(role)) return res.status(400).json({ error: "Invalid role" });
+  // Safety check: ensure user exists before inserting task
+  db.query("SELECT cognito_id FROM users WHERE cognito_id = ?", [uid], (err, rows) => {
+      if (err || rows.length === 0) return res.status(400).json({ error: "User profile not found. Please refresh." });
 
-  db.query("UPDATE users SET user_role=? WHERE cognito_id=?", [role, req.params.id], (err) => {
-    if (err) return res.status(500).json({ error: "Role update failed" });
-    res.json({ message: `Role updated to ${role} successfully` });
+      db.query(
+        "INSERT INTO tasks (user_id, task_text, status) VALUES (?, ?, ?)",
+        [uid, task_text, status || "Personal"],
+        (err, result) => {
+          if (err) return res.status(500).json({ error: "Insert failed: " + err.message });
+          
+          res.status(201).json({ 
+            task_id: result.insertId, 
+            user_id: uid,
+            task_text, 
+            status: status || "Personal",
+            created_at: new Date()
+          });
+        }
+      );
   });
 });
 
+// DELETE TASK (Admin Authority included)
 app.delete("/delete-task/:id", verifyToken, (req, res) => {
-  const { cognito_id, user_role } = req.user;
-  db.query("SELECT user_role FROM users WHERE cognito_id = ?", [cognito_id], (err, rows) => {
-    if (err) return res.status(500).json({ error: "Auth check failed" });
-    const actualRole = rows.length > 0 ? rows[0].user_role : user_role;
-    const isAdmin = actualRole === "Admin";
-    const sql = isAdmin ? "DELETE FROM tasks WHERE task_id=?" : "DELETE FROM tasks WHERE task_id=? AND user_id=?";
-    const params = isAdmin ? [req.params.id] : [req.params.id, cognito_id];
+    const uid = req.user.cognito_id;
+    db.query("SELECT user_role FROM users WHERE cognito_id = ?", [uid], (err, rows) => {
+        if (err) return res.status(500).json({ error: "Auth check failed" });
+        
+        const isAdmin = rows[0]?.user_role === "Admin";
+        const sql = isAdmin ? "DELETE FROM tasks WHERE task_id=?" : "DELETE FROM tasks WHERE task_id=? AND user_id=?";
+        const params = isAdmin ? [req.params.id] : [req.params.id, uid];
 
-    db.query(sql, params, (err, result) => {
-      if (err) return res.status(500).json({ error: "Delete failed" });
-      if (!result.affectedRows) return res.status(403).json({ error: "Unauthorized or task not found" });
-      res.json({ message: "Task deleted successfully" });
+        db.query(sql, params, (err) => {
+            if (err) return res.status(500).json({ error: "Delete failed" });
+            res.json({ message: "Deleted" });
+        });
     });
+});
+
+// UPDATE ROLE (Admin Only)
+app.put("/update-role/:id", verifyToken, adminOnly, (req, res) => {
+  db.query("UPDATE users SET user_role=? WHERE cognito_id=?", [req.body.role, req.params.id], (err) => {
+    if (err) return res.status(500).json({ error: "Update failed" });
+    res.json({ message: "Role Updated" });
   });
 });
 
-/* ===================== START SERVER ===================== */
+// DELETE USER (Admin Only)
+app.delete("/delete-user/:id", verifyToken, adminOnly, (req, res) => {
+    if (req.params.id === req.user.cognito_id) return res.status(400).json({ error: "Cannot delete yourself" });
+    
+    db.query("DELETE FROM users WHERE cognito_id = ?", [req.params.id], (err) => {
+        if (err) return res.status(500).json({ error: "User deletion failed" });
+        res.json({ message: "User removed" });
+    });
+});
+
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Backend running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Running on ${PORT}`));

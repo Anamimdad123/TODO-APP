@@ -12,8 +12,7 @@ import awsExports from "./aws-exports";
 Amplify.configure(awsExports);
 
 /* ================= API CONFIGURATION ================= */
-// Use VITE_ prefix for Vite environment variables
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+const API_BASE_URL = "https://taskflow-backend-4.onrender.com";
 
 /* ================= MAIN DASHBOARD ================= */
 function Dashboard({ signOut }) {
@@ -48,7 +47,6 @@ function Dashboard({ signOut }) {
   const getRequestConfig = async () => {
     try {
       const { tokens } = await fetchAuthSession();
-      // Use the JWT string directly
       const token = tokens?.idToken?.toString();
       return {
         headers: { Authorization: `Bearer ${token}` },
@@ -70,13 +68,16 @@ function Dashboard({ signOut }) {
       const config = await getRequestConfig();
 
       // 2. Sync with Backend to get Role
-      // Use the config with headers for ALL backend calls
-      const syncResponse = await axios.post(`${API_BASE_URL}/sync-user`, {}, config);
+      // Passing payload ensures backend can create user if it doesn't exist
+      const payload = tokens?.idToken?.payload;
+      const syncResponse = await axios.post(`${API_BASE_URL}/sync-user`, {
+        cognito_id: userId,
+        email: payload?.email,
+        firstName: payload?.given_name
+      }, config);
+
       const databaseRole = syncResponse.data.role;
 
-      // 3. Extract attributes from the idToken payload
-      const payload = tokens?.idToken?.payload;
-      
       setProfile({
         id: userId,
         name: payload?.given_name || "Guest",
@@ -85,23 +86,17 @@ function Dashboard({ signOut }) {
         role: databaseRole,
       });
 
-      // 4. Load User's Tasks (Calling /tasks instead of /tasks/ID for standard users)
+      // 3. Load User's Tasks (Using the generic /tasks route for own tasks)
       const taskResponse = await axios.get(`${API_BASE_URL}/tasks`, config);
       setTasks(taskResponse.data);
 
-      // 5. Load Administrative Data
+      // 4. Load Administrative Data
       if (databaseRole === "Admin" || databaseRole === "Employee") {
         const usersResponse = await axios.get(`${API_BASE_URL}/users`, config);
-        const list = usersResponse.data;
-
-        if (databaseRole === "Employee") {
-          setUsers(list.filter(u => u.user_role?.toLowerCase() === "candidate"));
-        } else {
-          setUsers(list);
-        }
+        setUsers(usersResponse.data);
       }
     } catch (error) {
-      console.error("Critical Load Error:", error.response?.data || error.message);
+      console.error("Critical Load Error:", error);
     } finally {
       setIsLoading(false);
     }
@@ -123,6 +118,7 @@ function Dashboard({ signOut }) {
         status: category
       }, config);
 
+      // Backend returns the full task object with ID
       setTasks(prev => [response.data, ...prev]);
       setNewTask("");
     } catch (error) {
@@ -151,7 +147,7 @@ function Dashboard({ signOut }) {
   const handleViewUser = async (target) => {
     try {
       const config = await getRequestConfig();
-      // Employees/Admins call specific user ID
+      // Target correct route: /tasks/:id
       const response = await axios.get(`${API_BASE_URL}/tasks/${target.cognito_id}`, config);
       setViewingUser(target);
       setViewingTasks(response.data);
@@ -179,6 +175,7 @@ function Dashboard({ signOut }) {
     );
   }
 
+  /* ================= UI RENDER ================= */
   return (
     <div className="app-layout">
       <nav className="app-sidebar">
@@ -267,15 +264,19 @@ function Dashboard({ signOut }) {
             </form>
 
             <div className="grid-layout">
-              {tasks.map((t) => (
-                <div key={t.task_id} className="assignment-card">
-                  <div className="assignment-header">
-                    <span className={`tag ${t.status?.toLowerCase() || 'personal'}`}>{t.status}</span>
-                    <button className="remove-btn" onClick={() => handleDeleteTask(t.task_id)}>Remove</button>
+              {tasks.length > 0 ? (
+                tasks.map((t) => (
+                  <div key={t.task_id} className="assignment-card">
+                    <div className="assignment-header">
+                      <span className={`tag ${t.status?.toLowerCase() || 'personal'}`}>{t.status}</span>
+                      <button className="remove-btn" onClick={() => handleDeleteTask(t.task_id)}>Remove</button>
+                    </div>
+                    <p className="assignment-text">{t.task_text}</p>
                   </div>
-                  <p className="assignment-text">{t.task_text}</p>
-                </div>
-              ))}
+                ))
+              ) : (
+                <div className="empty-state">No tasks created yet.</div>
+              )}
             </div>
           </section>
         )}
