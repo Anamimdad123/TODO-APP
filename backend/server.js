@@ -7,27 +7,33 @@ const { verifyToken, adminOnly, employeeOrAdmin } = require("./authMiddleware");
 const app = express();
 
 /* ===================== CORS CONFIGURATION ===================== */
-app.use(cors({ 
-    origin: function(origin, callback) {
-        if (!origin) return callback(null, true);
-        
+app.use(cors({
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like Postman, mobile apps, or same-origin)
+        if (!origin) {
+            console.log("✅ CORS: Allowing request with no origin");
+            return callback(null, true);
+        }
+
         const allowedOrigins = [
-            "http://localhost:5173", 
+            "http://localhost:5173",
             "http://localhost:5174",
             "http://localhost:3000",
             "https://main.d18b34rzjw22p4.amplifyapp.com"
         ];
-        
-        if (origin.includes('.amplifyapp.com') || allowedOrigins.includes(origin)) {
+
+        if (allowedOrigins.includes(origin) || origin.includes('.amplifyapp.com')) {
             return callback(null, true);
         }
-        
-        callback(new Error('Not allowed by CORS'));
+
+        return callback(new Error('Not allowed by CORS'), false);
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"]
 }));
+
+app.options(/(.*)/, cors()); // Handle preflight
 
 app.use(express.json());
 
@@ -140,7 +146,7 @@ app.get("/users", verifyToken, employeeOrAdmin, (req, res) => {
     let sql = "SELECT cognito_id, email, firstName, user_role FROM users ORDER BY firstName";
     let params = [];
 
-    if (actualRole === "Employee") {
+    if (actualRole === "Employee" || actualRole === "Employer") {
       sql = "SELECT cognito_id, email, firstName, user_role FROM users WHERE user_role = 'Candidate' ORDER BY firstName";
     }
 
@@ -154,26 +160,35 @@ app.get("/users", verifyToken, employeeOrAdmin, (req, res) => {
   });
 });
 
-app.get("/tasks", verifyToken, (req, res) => {
-  const { cognito_id } = req.user;
+// CRITICAL: Specific route MUST come BEFORE general route
+app.get("/tasks/:userId", verifyToken, employeeOrAdmin, (req, res) => {
+  const targetUserId = req.params.userId;
   
-  db.query("SELECT * FROM tasks WHERE user_id=? ORDER BY created_at DESC", [cognito_id], (err, rows) => {
-    if (err) {
-      console.error("Tasks query failed:", err);
-      return res.status(500).json({ error: "Failed to fetch tasks" });
-    }
-    res.json(rows);
-  });
-});
-
-app.get("/tasks/:id", verifyToken, employeeOrAdmin, (req, res) => {
-  const targetUserId = req.params.id;
+  console.log(`📋 Fetching tasks for user: ${targetUserId}`);
   
-  db.query("SELECT * FROM tasks WHERE user_id=? ORDER BY created_at DESC", [targetUserId], (err, rows) => {
+  db.query("SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at DESC", [targetUserId], (err, rows) => {
     if (err) {
       console.error("User tasks query failed:", err);
       return res.status(500).json({ error: "Failed to fetch user tasks" });
     }
+    
+    console.log(`✅ Retrieved ${rows.length} tasks for user ${targetUserId}`);
+    res.json(rows);
+  });
+});
+
+app.get("/tasks", verifyToken, (req, res) => {
+  const { cognito_id } = req.user;
+  
+  console.log(`📋 Fetching own tasks for: ${cognito_id}`);
+  
+  db.query("SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at DESC", [cognito_id], (err, rows) => {
+    if (err) {
+      console.error("Tasks query failed:", err);
+      return res.status(500).json({ error: "Failed to fetch tasks" });
+    }
+    
+    console.log(`✅ Retrieved ${rows.length} own tasks`);
     res.json(rows);
   });
 });
@@ -231,8 +246,8 @@ app.delete("/delete-task/:id", verifyToken, (req, res) => {
         
         const isAdmin = rows[0]?.user_role === "Admin";
         const sql = isAdmin 
-            ? "DELETE FROM tasks WHERE task_id=?" 
-            : "DELETE FROM tasks WHERE task_id=? AND user_id=?";
+            ? "DELETE FROM tasks WHERE task_id = ?" 
+            : "DELETE FROM tasks WHERE task_id = ? AND user_id = ?";
         const params = isAdmin ? [taskId] : [taskId, uid];
 
         db.query(sql, params, (err, result) => {
@@ -255,11 +270,11 @@ app.put("/update-role/:id", verifyToken, adminOnly, (req, res) => {
   const targetUserId = req.params.id;
   const { role } = req.body;
   
-  if (!["Admin", "Employee", "Candidate"].includes(role)) {
+  if (!["Admin", "Employee", "Employer", "Candidate"].includes(role)) {
     return res.status(400).json({ error: "Invalid role" });
   }
   
-  db.query("UPDATE users SET user_role=? WHERE cognito_id=?", [role, targetUserId], (err, result) => {
+  db.query("UPDATE users SET user_role = ? WHERE cognito_id = ?", [role, targetUserId], (err, result) => {
     if (err) {
       console.error("Role update failed:", err);
       return res.status(500).json({ error: "Failed to update role" });
@@ -281,25 +296,19 @@ app.delete("/delete-user/:id", verifyToken, adminOnly, (req, res) => {
         return res.status(400).json({ error: "Cannot delete yourself" });
     }
     
-    db.query("DELETE FROM tasks WHERE user_id = ?", [targetUserId], (err) => {
+    // Tasks will be deleted automatically due to ON DELETE CASCADE
+    db.query("DELETE FROM users WHERE cognito_id = ?", [targetUserId], (err, result) => {
         if (err) {
-            console.error("Task cleanup failed:", err);
-            return res.status(500).json({ error: "Failed to clean up user tasks" });
+            console.error("User deletion failed:", err);
+            return res.status(500).json({ error: "Failed to delete user" });
         }
         
-        db.query("DELETE FROM users WHERE cognito_id = ?", [targetUserId], (err, result) => {
-            if (err) {
-                console.error("User deletion failed:", err);
-                return res.status(500).json({ error: "Failed to delete user" });
-            }
-            
-            if (result.affectedRows === 0) {
-                return res.status(404).json({ error: "User not found" });
-            }
-            
-            console.log(`✅ User deleted: ${targetUserId}`);
-            res.json({ message: "User deleted successfully" });
-        });
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: "User not found" });
+        }
+        
+        console.log(`✅ User deleted: ${targetUserId} (tasks auto-deleted via CASCADE)`);
+        res.json({ message: "User deleted successfully" });
     });
 });
 

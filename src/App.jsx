@@ -12,7 +12,8 @@ import awsExports from "./aws-exports";
 Amplify.configure(awsExports);
 
 /* ================= API CONFIGURATION ================= */
-const API_BASE_URL = import.meta.env.VITE_API_URL || "https://taskflow-backend-4.onrender.com";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "https://taskflow-backend-5.onrender.com";
+// Make sure there's NO trailing slash ↑
 
 console.log("API Base URL:", API_BASE_URL);
 
@@ -46,26 +47,27 @@ function Dashboard({ signOut }) {
     day: "numeric",
     month: "long",
   });
-const getRequestConfig = async () => {
-  try {
-    const { tokens } = await fetchAuthSession();
-    const token = tokens?.idToken?.toString();  // CHANGED: Use idToken instead of accessToken
-    
-    if (!token) {
-      throw new Error("No access token available");
+
+  const getRequestConfig = async () => {
+    try {
+      const { tokens } = await fetchAuthSession();
+      const token = tokens?.idToken?.toString();
+      
+      if (!token) {
+        throw new Error("No access token available");
+      }
+      
+      return {
+        headers: { 
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+      };
+    } catch (err) {
+      console.error("Auth session retrieval failed", err);
+      throw err;
     }
-    
-    return {
-      headers: { 
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-    };
-  } catch (err) {
-    console.error("Auth session retrieval failed", err);
-    throw err;
-  }
-};;
+  };
 
   /* ================= DATA MANAGEMENT ================= */
   const fetchData = useCallback(async () => {
@@ -158,12 +160,14 @@ const getRequestConfig = async () => {
   const handleViewUser = async (target) => {
     try {
       const config = await getRequestConfig();
+      // FIXED: Use cognito_id (which matches user_id in database)
       const response = await axios.get(`${API_BASE_URL}/tasks/${target.cognito_id}`, config);
       setViewingUser(target);
       setViewingTasks(response.data);
+      setActiveScreen("user-profile");
     } catch (err) {
       console.error("Could not fetch user tasks", err);
-      alert("Failed to load user tasks");
+      alert("Failed to load user tasks. " + (err.response?.data?.error || err.message));
     }
   };
 
@@ -175,6 +179,20 @@ const getRequestConfig = async () => {
     } catch (error) {
       console.error("Role update failed:", error);
       alert(error.response?.data?.error || "Role update failed.");
+    }
+  };
+
+  const handleDeleteUser = async (userId) => {
+    if (!window.confirm("Delete this user permanently? This will also delete all their tasks and cannot be undone.")) return;
+    
+    try {
+      const config = await getRequestConfig();
+      await axios.delete(`${API_BASE_URL}/delete-user/${userId}`, config);
+      setUsers(prev => prev.filter(u => u.cognito_id !== userId));
+      alert("User deleted successfully");
+    } catch (error) {
+      console.error("User deletion failed:", error);
+      alert(error.response?.data?.error || "Failed to delete user.");
     }
   };
 
@@ -342,7 +360,18 @@ const getRequestConfig = async () => {
                         )}
                       </td>
                       <td>
-                        <button className="text-btn" onClick={() => handleViewUser(u)}>View Records</button>
+                        <button className="text-btn" onClick={() => handleViewUser(u)}>
+                          View Records
+                        </button>
+                        {profile?.role === "Admin" && (
+                          <button 
+                            className="remove-btn" 
+                            style={{marginLeft: '8px'}}
+                            onClick={() => handleDeleteUser(u.cognito_id)}
+                          >
+                            Delete User
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -352,19 +381,28 @@ const getRequestConfig = async () => {
           </section>
         )}
 
-        {viewingUser && (
+        {activeScreen === "user-profile" && viewingUser && (
           <section className="fade-in">
-            <button className="text-btn" style={{marginBottom: '1rem'}} onClick={() => setViewingUser(null)}>← Return to Directory</button>
+            <button 
+              className="text-btn" 
+              style={{marginBottom: '1rem'}} 
+              onClick={() => {
+                setViewingUser(null);
+                setActiveScreen("directory");
+              }}
+            >
+              ← Return to Directory
+            </button>
             <div className="view-header">
-                <h2>Records for {viewingUser.firstName}</h2>
-                <p className="text-muted">{viewingUser.email}</p>
+              <h2>Records for {viewingUser.firstName}</h2>
+              <p className="text-muted">{viewingUser.email}</p>
             </div>
             <div className="grid-layout" style={{marginTop: '2rem'}}>
               {viewingTasks.length > 0 ? (
                 viewingTasks.map((t) => (
                   <div key={t.task_id} className="assignment-card">
                     <div className="assignment-header">
-                      <span className="tag">{t.status}</span>
+                      <span className={`tag ${t.status?.toLowerCase() || 'personal'}`}>{t.status}</span>
                       {profile?.role === "Admin" && (
                         <button className="remove-btn" onClick={() => handleDeleteTask(t.task_id, true)}>Remove</button>
                       )}
