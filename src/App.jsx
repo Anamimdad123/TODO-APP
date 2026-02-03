@@ -12,7 +12,9 @@ import awsExports from "./aws-exports";
 Amplify.configure(awsExports);
 
 /* ================= API CONFIGURATION ================= */
-const API_BASE_URL = "https://taskflow-backend-4.onrender.com";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "https://taskflow-backend-4.onrender.com";
+
+console.log("API Base URL:", API_BASE_URL);
 
 /* ================= MAIN DASHBOARD ================= */
 function Dashboard({ signOut }) {
@@ -29,6 +31,7 @@ function Dashboard({ signOut }) {
   const [viewingUser, setViewingUser] = useState(null);
   const [viewingTasks, setViewingTasks] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   /* ================= UTILITIES ================= */
   const getTimeOfDay = () => {
@@ -43,24 +46,32 @@ function Dashboard({ signOut }) {
     day: "numeric",
     month: "long",
   });
-
-  const getRequestConfig = async () => {
-    try {
-      const { tokens } = await fetchAuthSession();
-      const token = tokens?.idToken?.toString();
-      return {
-        headers: { Authorization: `Bearer ${token}` },
-      };
-    } catch (err) {
-      console.error("Auth session retrieval failed", err);
-      return { headers: {} };
+const getRequestConfig = async () => {
+  try {
+    const { tokens } = await fetchAuthSession();
+    const token = tokens?.idToken?.toString();  // CHANGED: Use idToken instead of accessToken
+    
+    if (!token) {
+      throw new Error("No access token available");
     }
-  };
+    
+    return {
+      headers: { 
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+    };
+  } catch (err) {
+    console.error("Auth session retrieval failed", err);
+    throw err;
+  }
+};;
 
   /* ================= DATA MANAGEMENT ================= */
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
+      setError(null);
       
       // 1. Get Cognito Auth Data
       const { userId } = await getCurrentUser();
@@ -68,7 +79,6 @@ function Dashboard({ signOut }) {
       const config = await getRequestConfig();
 
       // 2. Sync with Backend to get Role
-      // Passing payload ensures backend can create user if it doesn't exist
       const payload = tokens?.idToken?.payload;
       const syncResponse = await axios.post(`${API_BASE_URL}/sync-user`, {
         cognito_id: userId,
@@ -86,7 +96,7 @@ function Dashboard({ signOut }) {
         role: databaseRole,
       });
 
-      // 3. Load User's Tasks (Using the generic /tasks route for own tasks)
+      // 3. Load User's Tasks
       const taskResponse = await axios.get(`${API_BASE_URL}/tasks`, config);
       setTasks(taskResponse.data);
 
@@ -97,6 +107,7 @@ function Dashboard({ signOut }) {
       }
     } catch (error) {
       console.error("Critical Load Error:", error);
+      setError(error.response?.data?.error || error.message || "Failed to load data");
     } finally {
       setIsLoading(false);
     }
@@ -118,11 +129,11 @@ function Dashboard({ signOut }) {
         status: category
       }, config);
 
-      // Backend returns the full task object with ID
       setTasks(prev => [response.data, ...prev]);
       setNewTask("");
     } catch (error) {
       console.error("Task creation failed:", error);
+      alert(error.response?.data?.error || "Failed to create task");
     }
   };
 
@@ -140,19 +151,19 @@ function Dashboard({ signOut }) {
       }
     } catch (error) {
       console.error("Delete failed:", error);
-      alert("Permission denied or server error.");
+      alert(error.response?.data?.error || "Permission denied or server error.");
     }
   };
 
   const handleViewUser = async (target) => {
     try {
       const config = await getRequestConfig();
-      // Target correct route: /tasks/:id
       const response = await axios.get(`${API_BASE_URL}/tasks/${target.cognito_id}`, config);
       setViewingUser(target);
       setViewingTasks(response.data);
     } catch (err) {
       console.error("Could not fetch user tasks", err);
+      alert("Failed to load user tasks");
     }
   };
 
@@ -162,7 +173,8 @@ function Dashboard({ signOut }) {
       await axios.put(`${API_BASE_URL}/update-role/${userId}`, { role: newRole }, config);
       setUsers(prev => prev.map(u => u.cognito_id === userId ? { ...u, user_role: newRole } : u));
     } catch (error) {
-      alert("Role update failed.");
+      console.error("Role update failed:", error);
+      alert(error.response?.data?.error || "Role update failed.");
     }
   };
 
@@ -171,6 +183,19 @@ function Dashboard({ signOut }) {
       <div className="app-loader">
         <div className="spinner"></div>
         <p>Initializing Workspace...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="app-loader">
+        <div className="error-message">
+          <h3>Connection Error</h3>
+          <p>{error}</p>
+          <button onClick={fetchData} className="primary-btn">Retry</button>
+          <button onClick={signOut} className="secondary-btn">Sign Out</button>
+        </div>
       </div>
     );
   }

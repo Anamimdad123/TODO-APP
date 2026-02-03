@@ -1,65 +1,114 @@
-import { CognitoJwtVerifier } from "aws-jwt-verify";
+const { CognitoJwtVerifier } = require("aws-jwt-verify");
 
-// Initialize the verifier once outside the function for performance
+// CHANGE: Use "id" token instead of "access" token
 const verifier = CognitoJwtVerifier.create({
   userPoolId: "us-east-1_7e06SpUx4",
-  tokenUse: "id", // Use "access" if you are sending the Access Token instead of ID Token
-  clientId: "55kagtn0qce3qhrml4id2l11i2", // IMPORTANT: Add your App Client ID from aws-exports.js here
+  tokenUse: "id",  // Changed from "access" to "id"
+  clientId: "55kagtn0qce3qhrml4id2l11i2",
 });
 
-export const verifyToken = async (req, res, next) => {
+const verifyToken = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader) {
+      console.error("❌ No Authorization header provided");
       return res.status(401).json({ error: "Authorization header missing" });
     }
 
     const token = authHeader.split(" ")[1];
-    
-    // This one line replaces your getPems, jwt.verify, and axios calls!
+    if (!token) {
+      console.error("❌ Malformed Authorization header");
+      return res.status(401).json({ error: "Malformed authorization header" });
+    }
+
     const payload = await verifier.verify(token);
-
-    // Extract roles from groups
     const groups = payload["cognito:groups"] || [];
+    
     let role = "Candidate";
-    if (groups.includes("Admin")) role = "Admin";
-    else if (groups.includes("Employee")) role = "Employee";
+    if (groups.includes("Admin")) {
+      role = "Admin";
+    } else if (groups.includes("Employee")) {
+      role = "Employee";
+    }
 
-    // Attach user data to the request object
     req.user = {
       cognito_id: payload.sub,
-      email: payload.email,
+      email: payload.email || payload.username,
       firstName: payload.given_name || payload["custom:firstName"] || "User",
       groups,
       user_role: role,
     };
 
+    console.log(`✅ Token verified for user: ${req.user.email} (${role})`);
     next();
+    
   } catch (err) {
-    console.error("AUTH ERROR:", err.message);
-    // If token is expired or invalid, aws-jwt-verify throws an error
-    res.status(401).json({ error: "Token verification failed or expired" });
+    console.error("❌ Token verification failed:", err.message);
+    
+    if (err.message.includes("expired")) {
+      return res.status(401).json({ error: "Token has expired. Please sign in again." });
+    }
+    
+    if (err.message.includes("invalid")) {
+      return res.status(401).json({ error: "Invalid token. Please sign in again." });
+    }
+    
+    return res.status(401).json({ error: "Authentication failed" });
   }
 };
 
-// These stay exactly the same as your original code
-export const adminOnly = (req, res, next) => {
+const adminOnly = (req, res, next) => {
+  if (!req.user) {
+    console.error("❌ adminOnly: No user object found");
+    return res.status(401).json({ error: "Authentication required" });
+  }
+
   if (!req.user.groups.includes("Admin")) {
+    console.error(`❌ adminOnly: User ${req.user.email} is not an Admin`);
     return res.status(403).json({ error: "Admin access required" });
   }
+
+  console.log(`✅ Admin access granted to: ${req.user.email}`);
   next();
 };
 
-export const employeeOrAdmin = (req, res, next) => {
-  if (!req.user.groups.includes("Admin") && !req.user.groups.includes("Employee")) {
-    return res.status(403).json({ error: "Access denied" });
+const employeeOrAdmin = (req, res, next) => {
+  if (!req.user) {
+    console.error("❌ employeeOrAdmin: No user object found");
+    return res.status(401).json({ error: "Authentication required" });
   }
+
+  const hasAccess = req.user.groups.includes("Admin") || req.user.groups.includes("Employee");
+  
+  if (!hasAccess) {
+    console.error(`❌ employeeOrAdmin: User ${req.user.email} lacks required permissions`);
+    return res.status(403).json({ error: "Employee or Admin access required" });
+  }
+
+  console.log(`✅ Employee/Admin access granted to: ${req.user.email}`);
   next();
 };
 
-export const candidateOnly = (req, res, next) => {
-  if (req.user.groups.includes("Admin") || req.user.groups.includes("Employee")) {
-    return res.status(403).json({ error: "Candidates only" });
+const candidateOnly = (req, res, next) => {
+  if (!req.user) {
+    console.error("❌ candidateOnly: No user object found");
+    return res.status(401).json({ error: "Authentication required" });
   }
+
+  const isCandidate = !req.user.groups.includes("Admin") && !req.user.groups.includes("Employee");
+  
+  if (!isCandidate) {
+    console.error(`❌ candidateOnly: User ${req.user.email} is not a Candidate`);
+    return res.status(403).json({ error: "Candidate access only" });
+  }
+
+  console.log(`✅ Candidate access granted to: ${req.user.email}`);
   next();
+};
+
+module.exports = {
+  verifyToken,
+  adminOnly,
+  employeeOrAdmin,
+  candidateOnly
 };
