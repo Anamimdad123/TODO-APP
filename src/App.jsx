@@ -11,9 +11,7 @@ import awsExports from "./aws-exports";
 
 Amplify.configure(awsExports);
 
-/* ================= API CONFIGURATION ================= */
-const API_BASE_URL = import.meta.env.VITE_API_URL || "https://taskflow-backend-5.onrender.com";
-// Make sure there's NO trailing slash ↑
+const API_BASE_URL = import.meta.env.VITE_API_URL || "https://taskflow-backend-9.onrender.com";
 
 console.log("API Base URL:", API_BASE_URL);
 

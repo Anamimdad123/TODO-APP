@@ -1,114 +1,117 @@
-const { CognitoJwtVerifier } = require("aws-jwt-verify");
+const jwt = require('jsonwebtoken');
+const jwksClient = require('jwks-rsa');
 
-// CHANGE: Use "id" token instead of "access" token
-const verifier = CognitoJwtVerifier.create({
-  userPoolId: "us-east-1_7e06SpUx4",
-  tokenUse: "id",  // Changed from "access" to "id"
-  clientId: "55kagtn0qce3qhrml4id2l11i2",
+// Configure JWKS client for Cognito
+const client = jwksClient({
+  jwksUri: `https://cognito-idp.${process.env.AWS_REGION || 'us-east-1'}.amazonaws.com/${process.env.COGNITO_USER_POOL_ID}/.well-known/jwks.json`,
+  cache: true,
+  rateLimit: true
 });
 
-const verifyToken = async (req, res, next) => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) {
-      console.error("❌ No Authorization header provided");
-      return res.status(401).json({ error: "Authorization header missing" });
+function getKey(header, callback) {
+  client.getSigningKey(header.kid, function(err, key) {
+    if (err) {
+      callback(err);
+    } else {
+      const signingKey = key.publicKey || key.rsaPublicKey;
+      callback(null, signingKey);
     }
+  });
+}
 
-    const token = authHeader.split(" ")[1];
-    if (!token) {
-      console.error("❌ Malformed Authorization header");
-      return res.status(401).json({ error: "Malformed authorization header" });
-    }
+// Verify JWT token from Cognito
+const verifyToken = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    console.log('❌ No authorization header found');
+    return res.status(401).json({ error: 'No token provided' });
+  }
 
-    const payload = await verifier.verify(token);
-    const groups = payload["cognito:groups"] || [];
-    
-    let role = "Candidate";
-    if (groups.includes("Admin")) {
-      role = "Admin";
-    } else if (groups.includes("Employee")) {
-      role = "Employee";
+  const token = authHeader.substring(7);
+
+  jwt.verify(token, getKey, {
+    algorithms: ['RS256']
+  }, (err, decoded) => {
+    if (err) {
+      console.error('❌ Token verification failed:', err.message);
+      return res.status(403).json({ error: 'Invalid or expired token' });
     }
 
     req.user = {
-      cognito_id: payload.sub,
-      email: payload.email || payload.username,
-      firstName: payload.given_name || payload["custom:firstName"] || "User",
-      groups,
-      user_role: role,
+      cognito_id: decoded.sub,
+      email: decoded.email,
+      firstName: decoded.given_name || decoded.name
     };
 
-    console.log(`✅ Token verified for user: ${req.user.email} (${role})`);
+    console.log(`✅ Token verified for user: ${req.user.email}`);
     next();
-    
-  } catch (err) {
-    console.error("❌ Token verification failed:", err.message);
-    
-    if (err.message.includes("expired")) {
-      return res.status(401).json({ error: "Token has expired. Please sign in again." });
-    }
-    
-    if (err.message.includes("invalid")) {
-      return res.status(401).json({ error: "Invalid token. Please sign in again." });
-    }
-    
-    return res.status(401).json({ error: "Authentication failed" });
-  }
+  });
 };
 
+// Admin-only middleware
 const adminOnly = (req, res, next) => {
-  if (!req.user) {
-    console.error("❌ adminOnly: No user object found");
-    return res.status(401).json({ error: "Authentication required" });
-  }
+  const mysql = require('mysql2');
+  
+  const db = mysql.createPool({
+    host: process.env.DB_HOST || "database-1.cvuukc64q17g.us-east-1.rds.amazonaws.com",
+    user: process.env.DB_USER || "admin",
+    password: process.env.DB_PASSWORD || "Anumimdad12",
+    database: process.env.DB_NAME || "my_app_data",
+    port: 3306,
+    connectionLimit: 10,
+    ssl: { rejectUnauthorized: false }
+  });
 
-  if (!req.user.groups.includes("Admin")) {
-    console.error(`❌ adminOnly: User ${req.user.email} is not an Admin`);
-    return res.status(403).json({ error: "Admin access required" });
-  }
+  db.query("SELECT user_role FROM users WHERE cognito_id = ?", [req.user.cognito_id], (err, rows) => {
+    if (err) {
+      console.error("❌ Admin check DB error:", err);
+      return res.status(500).json({ error: "Authorization check failed" });
+    }
 
-  console.log(`✅ Admin access granted to: ${req.user.email}`);
-  next();
+    const userRole = rows[0]?.user_role;
+    
+    if (userRole !== "Admin") {
+      console.log(`❌ Access denied. User role: ${userRole}, Required: Admin`);
+      return res.status(403).json({ error: "Access denied. Admin required." });
+    }
+
+    console.log(`✅ Admin access granted for: ${req.user.email}`);
+    next();
+  });
 };
 
+// Employee OR Admin middleware - THIS IS THE FIX
 const employeeOrAdmin = (req, res, next) => {
-  if (!req.user) {
-    console.error("❌ employeeOrAdmin: No user object found");
-    return res.status(401).json({ error: "Authentication required" });
-  }
-
-  const hasAccess = req.user.groups.includes("Admin") || req.user.groups.includes("Employee");
+  const mysql = require('mysql2');
   
-  if (!hasAccess) {
-    console.error(`❌ employeeOrAdmin: User ${req.user.email} lacks required permissions`);
-    return res.status(403).json({ error: "Employee or Admin access required" });
-  }
+  const db = mysql.createPool({
+    host: process.env.DB_HOST || "database-1.cvuukc64q17g.us-east-1.rds.amazonaws.com",
+    user: process.env.DB_USER || "admin",
+    password: process.env.DB_PASSWORD || "Anumimdad12",
+    database: process.env.DB_NAME || "my_app_data",
+    port: 3306,
+    connectionLimit: 10,
+    ssl: { rejectUnauthorized: false }
+  });
 
-  console.log(`✅ Employee/Admin access granted to: ${req.user.email}`);
-  next();
+  db.query("SELECT user_role FROM users WHERE cognito_id = ?", [req.user.cognito_id], (err, rows) => {
+    if (err) {
+      console.error("❌ Employee/Admin check DB error:", err);
+      return res.status(500).json({ error: "Authorization check failed" });
+    }
+
+    const userRole = rows[0]?.user_role;
+    
+    // ✅ FIXED: Allow both Employee AND Admin
+    if (userRole !== "Admin" && userRole !== "Employee") {
+      console.log(`❌ Access denied. User role: ${userRole}, Required: Employee or Admin`);
+      return res.status(403).json({ error: "Access denied. Employee or Admin required." });
+    }
+
+    console.log(`✅ Employee/Admin access granted for: ${req.user.email} (Role: ${userRole})`);
+    next();
+  });
 };
 
-const candidateOnly = (req, res, next) => {
-  if (!req.user) {
-    console.error("❌ candidateOnly: No user object found");
-    return res.status(401).json({ error: "Authentication required" });
-  }
-
-  const isCandidate = !req.user.groups.includes("Admin") && !req.user.groups.includes("Employee");
-  
-  if (!isCandidate) {
-    console.error(`❌ candidateOnly: User ${req.user.email} is not a Candidate`);
-    return res.status(403).json({ error: "Candidate access only" });
-  }
-
-  console.log(`✅ Candidate access granted to: ${req.user.email}`);
-  next();
-};
-
-module.exports = {
-  verifyToken,
-  adminOnly,
-  employeeOrAdmin,
-  candidateOnly
-};
+module.exports = { verifyToken, adminOnly, employeeOrAdmin };
